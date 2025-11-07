@@ -24,6 +24,32 @@ MASK_NO_COL16 = ~mask_col[16] & ((1 << N_CELLS) - 1)
 MASK_NO_COL17 = ~mask_col[17] & ((1 << N_CELLS) - 1)
 MASK_NO_COL18 = ~mask_col[18] & ((1 << N_CELLS) - 1)
 
+MASK_COLS_0_TO_3 = mask_col[0] | mask_col[1] | mask_col[2] | mask_col[3]
+MASK_COLS_0_TO_2 = mask_col[0] | mask_col[1] | mask_col[2]
+MASK_COLS_0_TO_1 = mask_col[0] | mask_col[1]
+MASK_COLS_15_TO_18 = mask_col[15] | mask_col[16] | mask_col[17] | mask_col[18]
+MASK_COLS_16_TO_18 = mask_col[16] | mask_col[17] | mask_col[18]
+MASK_COLS_17_TO_18 = mask_col[17] | mask_col[18]
+
+mask_row = []
+for r in range(BOARD_SIZE):
+    m = 0
+    for c in range(BOARD_SIZE):
+        m |= (1 << (r * BOARD_SIZE + c))
+    mask_row.append(m)
+
+MASK_ROW0 = mask_row[0]
+MASK_ROW15 = mask_row[15]
+MASK_ROW16 = mask_row[16]
+MASK_ROW17 = mask_row[17]
+MASK_ROW18 = mask_row[18]
+
+MASK_ROWS_15_TO_18 = MASK_ROW15 | MASK_ROW16 | MASK_ROW17 | MASK_ROW18
+MASK_ROWS_16_TO_18 = MASK_ROW16 | MASK_ROW17 | MASK_ROW18
+MASK_ROWS_17_TO_18 = MASK_ROW17 | MASK_ROW18
+
+FULL_MASK = (1 << N_CELLS) - 1
+
 # --- Bitboard helper functions --- #
 def pos_to_bit(row, col):
     """ Convert (row, col) to bitboard position. """
@@ -120,21 +146,197 @@ def open_four(bb_self, bb_ops):
         MASK_NO_COL0,  # avoid wrapping from first column
     )
 
+    print("Open fours:", total)
+    return total
+
+def dead_four(bb_self, bb_ops):
+    """Count half-open fours: OXXXX. or .XXXXO (edge counts as blocked)."""
+    empty = ~(bb_self | bb_ops) & FULL_MASK
+    total = 0
+
+    def count_dir(shift, run_mask, before_mask, starts_before_edge, starts_after_edge):
+        # Four-run starts (leftmost/topmost of the XXXX segment)
+        starts = bb_self & (bb_self >> shift) & (bb_self >> (2 * shift)) & (bb_self >> (3 * shift))
+        starts &= run_mask
+
+        # Neighbor states aligned to 'starts'
+        before_empty   = ((empty  & before_mask) << shift)
+        before_blocked = ((bb_ops & before_mask) << shift) | starts_before_edge
+        after_empty    = (empty  >> (4 * shift))
+        after_blocked  = (bb_ops >> (4 * shift)) | starts_after_edge
+
+        half_open = starts & ((before_empty & after_blocked) | (before_blocked & after_empty))
+        return half_open.bit_count()
+
+    # Horizontal
+    total += count_dir(
+        SHIFT_RIGHT,
+        MASK_NO_COL18 & MASK_NO_COL17 & MASK_NO_COL16,
+        MASK_NO_COL18,
+        mask_col[0],                # blocked by left edge
+        MASK_COLS_15_TO_18,         # blocked by right edge after 4
+    )
+
+    # Vertical
+    total += count_dir(
+        SHIFT_DOWN,
+        FULL_MASK,
+        FULL_MASK,
+        MASK_ROW0,                  # blocked by top edge
+        MASK_ROWS_15_TO_18,         # blocked by bottom edge after 4
+    )
+
+    # Diagonal down-right
+    total += count_dir(
+        SHIFT_DOWN_RIGHT,
+        MASK_NO_COL18 & MASK_NO_COL17 & MASK_NO_COL16 & MASK_NO_COL15,
+        MASK_NO_COL18,
+        MASK_ROW0 | mask_col[0],    # blocked by top or left edge
+        MASK_ROWS_15_TO_18 | MASK_COLS_15_TO_18,
+    )
+
+    # Diagonal down-left
+    total += count_dir(
+        SHIFT_DOWN_LEFT,
+        MASK_NO_COL0 & MASK_NO_COL1 & MASK_NO_COL2 & MASK_NO_COL3,
+        MASK_NO_COL0,
+        MASK_ROW0 | mask_col[18],   # blocked by top or right edge
+        MASK_ROWS_15_TO_18 | MASK_COLS_0_TO_3,
+    )
+
+    print("Dead fours:", total)
+    return total
+
+def open_three(bb_self, bb_ops):
+    """Count open-three patterns (.XXX.) for bb_self against bb_ops."""
+    empty = ~(bb_self | bb_ops) & FULL_MASK
+    total = 0
+
+    def count_dir(shift, run_mask, before_mask):
+        # Starts of XXX runs in this direction (leftmost cell of the run)
+        starts = bb_self & (bb_self >> shift) & (bb_self >> (2 * shift))
+        starts &= run_mask  # ensure the 3-run itself doesn’t wrap across columns
+
+        # Align empties to the start bit:
+        # - before_ok: empty exactly at i - shift  => (empty << shift) aligned to i
+        # - after_ok:  empty exactly at i + 3*shift => (empty >> (3*shift)) aligned to i
+        before_ok = (empty & before_mask) << shift
+        after_ok  = empty >> (3 * shift)
+
+        live3_starts = starts & before_ok & after_ok
+        return live3_starts.bit_count()
+
+    # Horizontal
+    total += count_dir(
+        SHIFT_RIGHT,
+        MASK_NO_COL18 & MASK_NO_COL17 & MASK_NO_COL16,  # 3 stones fit to the right
+        MASK_NO_COL18,  # before (i - 1) must not come from col 18 wrapping to next row
+    )
+
+    # Vertical (no column wrap-around on vertical shifts; run_mask is full board)
+    total += count_dir(
+        SHIFT_DOWN,
+        FULL_MASK,
+        FULL_MASK,
+    )
+
+    # Diagonal down-right
+    total += count_dir(
+        SHIFT_DOWN_RIGHT,
+        MASK_NO_COL18 & MASK_NO_COL17 & MASK_NO_COL16,
+        MASK_NO_COL18,  # avoid wrapping from last column
+    )
+
+    # Diagonal down-left
+    total += count_dir(
+        SHIFT_DOWN_LEFT,
+        MASK_NO_COL0 & MASK_NO_COL1 & MASK_NO_COL2,
+        MASK_NO_COL0,  # avoid wrapping from first column
+    )
+
+    print("Open threes:", total)
+    return total
+
+def dead_three(bb_self, bb_ops):
+    """Count half-open threes: OXXX. or .XXXO (edge counts as blocked)."""
+    empty = ~(bb_self | bb_ops) & FULL_MASK
+    total = 0
+
+    def count_dir(shift, run_mask, before_mask, starts_before_edge, starts_after_edge):
+        # Three-run starts (leftmost/topmost of the XXX segment)
+        starts = bb_self & (bb_self >> shift) & (bb_self >> (2 * shift))
+        starts &= run_mask
+
+        # Neighbor states aligned to 'starts'
+        before_empty   = ((empty  & before_mask) << shift)
+        before_blocked = ((bb_ops & before_mask) << shift) | starts_before_edge
+        after_empty    = (empty  >> (3 * shift))
+        after_blocked  = (bb_ops >> (3 * shift)) | starts_after_edge
+
+        half_open = starts & ((before_empty & after_blocked) | (before_blocked & after_empty))
+        return half_open.bit_count()
+
+    # Horizontal
+    total += count_dir(
+        SHIFT_RIGHT,
+        MASK_NO_COL18 & MASK_NO_COL17 & MASK_NO_COL16,
+        MASK_NO_COL18,
+        mask_col[0],                # blocked by left edge
+        MASK_COLS_16_TO_18,         # blocked by right edge after 3
+    )
+
+    # Vertical
+    total += count_dir(
+        SHIFT_DOWN,
+        FULL_MASK,
+        FULL_MASK,
+        MASK_ROW0,                  # blocked by top edge
+        MASK_ROWS_16_TO_18,         # blocked by bottom edge after 3
+    )
+
+    # Diagonal down-right
+    total += count_dir(
+        SHIFT_DOWN_RIGHT,
+        MASK_NO_COL18 & MASK_NO_COL17 & MASK_NO_COL16,
+        MASK_NO_COL18,
+        MASK_ROW0 | mask_col[0],    # blocked by top or left edge
+        MASK_ROWS_16_TO_18 | MASK_COLS_16_TO_18,
+    )
+
+    # Diagonal down-left
+    total += count_dir(
+        SHIFT_DOWN_LEFT,
+        MASK_NO_COL0 & MASK_NO_COL1 & MASK_NO_COL2,
+        MASK_NO_COL0,
+        MASK_ROW0 | mask_col[18],   # blocked by top or right edge
+        MASK_ROWS_16_TO_18 | MASK_COLS_0_TO_2,
+    )
+
+    print("Dead threes:", total)
     return total
 
 # --- Evaluation function --- #
 def evaluate_board(bb_X, bb_0):
-    """ Evaluation function to calculate the board state, the higher the score, the better the position. """
+    """ Evaluation function to calculate the board state. """
     score_X = 0
     score_0 = 0
 
-    # if has_five(bb_X):
-    #     score_X += 100000
-    # if has_five(bb_0):
-    #     score_0 += 100000
+    if has_five(bb_X):
+        print("Five in a row: {'X'}")
+        score_X += 100000
+    if has_five(bb_0):
+        print("Five in a row: {'O'}")
+        score_0 += 100000
 
-    score_X += open_four(bb_X, bb_0) * 1000
-    score_0 += open_four(bb_0, bb_X) * 1000
+    # Open fours
+    score_X += open_four(bb_X, bb_0) * 15000
+    score_0 += open_four(bb_0, bb_X) * 15000
+
+    # Double threat detection
+    if ((open_three(bb_X, bb_0) >=2 or (dead_four(bb_X, bb_0) == 2)) or (open_three(bb_X, bb_0) == 1 and dead_four(bb_X, bb_0) == 1)):
+        score_X += 10000
+    if ((open_three(bb_0, bb_X) >=2 or (dead_four(bb_0, bb_X) == 2)) or (open_three(bb_0, bb_X) == 1 and dead_four(bb_0, bb_X) == 1)):
+        score_0 += 10000
 
     return score_X - score_0
 
@@ -170,7 +372,7 @@ def print_board(bb_X, bb_0):
         print(row_str)
     print()
 
-# --- Exemple d'utilisation ---
+# --- Main --- #
 if __name__ == "__main__":
     bb_X = 0
     bb_O = 0
@@ -180,16 +382,26 @@ if __name__ == "__main__":
     bb_X, bb_O = play_move(bb_X, bb_O, 2, 16, 'O')
     for c in range(0, 2):
         bb_X, bb_O = play_move(bb_X, bb_O, 3, c, 'X')
-    for c in range(15, 19):
+    for c in range(17, 19):
         bb_X, bb_O = play_move(bb_X, bb_O, 2, c, 'X')
+    for c in range(15, 19):
+        bb_X, bb_O = play_move(bb_X, bb_O, 4, c, 'X')
 
-    for c in range(8, 12):
-        bb_X, bb_O = play_move(bb_X, bb_O, 8, c, 'X')
+    # for c in range(0, 4):
+    #     bb_X, bb_O = play_move(bb_X, bb_O, 8, c, 'X')
 
+    # Diagonal line of 4
+    bb_X, bb_O = play_move(bb_X, bb_O, 10, 10, 'X')
+    bb_X, bb_O = play_move(bb_X, bb_O, 11, 11, 'X')
+    bb_X, bb_O = play_move(bb_X, bb_O, 12, 12, 'X')
+    bb_X, bb_O = play_move(bb_X, bb_O, 13, 13, 'X')
+    bb_X, bb_O = play_move(bb_X, bb_O, 14, 14, 'O')
     print_board(bb_X, bb_O)
     print("Évaluation:", evaluate_board(bb_X, bb_O))
 
     # X complète la ligne (5)
     bb_X, bb_O = play_move(bb_X, bb_O, 8, 7, 'O')
+    bb_X, bb_O = play_move(bb_X, bb_O, 8, 12, 'O')
+    # bb_X, bb_O = play_move(bb_X, bb_O, 9, 9, 'O')
     print_board(bb_X, bb_O)
     print("Évaluation:", evaluate_board(bb_X, bb_O))
