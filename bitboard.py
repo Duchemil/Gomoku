@@ -399,20 +399,20 @@ def apply_captures(bb_self, bb_opp, move_bit):
     return bb_self, bb_opp
 
 # --- Move functions --- #
-def play_move(bb_X, bb_0, row, col, player):
-    """ Play a move at (row, col) on the bitboard bb. """
+def play_move(bb_X, bb_O, row, col, player):
+    """ Play a move at (row, col); always return (bb_X, bb_O). """
     move_bit = pos_to_bit(row, col)
-    if (bb_X | bb_0) & move_bit:
+    if (bb_X | bb_O) & move_bit:
         raise ValueError("Cell already occupied")
 
     if player == 'X':
-        bb_self, bb_opp = bb_X | move_bit, bb_0
-        bb_self, bb_opp = apply_captures(bb_self, bb_opp, move_bit)
-        return bb_self, bb_opp
+        bb_X_new, bb_O_new = bb_X | move_bit, bb_O
+        bb_X_new, bb_O_new = apply_captures(bb_X_new, bb_O_new, move_bit)
+        return bb_X_new, bb_O_new
 
-    bb_self, bb_opp = bb_0 | move_bit, bb_X
-    bb_self, bb_opp = apply_captures(bb_self, bb_opp, move_bit)
-    return bb_opp, bb_self
+    bb_O_new, bb_X_new = bb_O | move_bit, bb_X
+    bb_O_new, bb_X_new = apply_captures(bb_O_new, bb_X_new, move_bit)
+    return bb_X_new, bb_O_new
 
 def undo_move(bb_X, bb_0, row, col, player):
     """ Undo a move at (row, col) on the bitboard bb. """

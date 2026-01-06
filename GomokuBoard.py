@@ -2,9 +2,10 @@ import customtkinter as ctk
 from bitboard import play_move, has_five
 
 class GomokuBoard:
-    def __init__(self, canvas, turn_label, size=19, cell_size=30):
+    def __init__(self, canvas, turn_label, capture_label, size=19, cell_size=30):
         self.canvas = canvas
         self.turn_label = turn_label
+        self.capture_label = capture_label
         self.size = size
         self.cell_size = cell_size
         self.turn = 0
@@ -12,22 +13,31 @@ class GomokuBoard:
         self.bb_X = 0
         self.bb_O = 0
         self.game_over = False
+        self.captured_X = 0
+        self.captured_O = 0
         self.draw_board()
         self.update_turn_label()
+        self.update_capture_label()
 
     def update_turn_label(self):
         player = "Black" if self.turn % 2 == 0 else "White"
         self.turn_label.configure(text=f"Current turn: {player}")
+
+    def update_capture_label(self):
+        self.capture_label.configure(text=f"Captures - Black: {self.captured_X} | White: {self.captured_O}")
 
     def reset_board(self):
         self.turn = 0
         self.bb_X = 0
         self.bb_O = 0
         self.game_over = False
+        self.captured_X = 0
+        self.captured_O = 0
         self.board = [[None for _ in range(self.size)] for _ in range(self.size)]
         self.canvas.delete("all")
         self.draw_board()
         self.update_turn_label()
+        self.update_capture_label()
 
     def draw_board(self):
         # Draw clickable points at intersections
@@ -48,6 +58,7 @@ class GomokuBoard:
             self.board[row][col] = {"player": player, "id": stone_id}
 
             captured_bits = (prev_bb_O & ~self.bb_O) if player == 'X' else (prev_bb_X & ~self.bb_X)
+            captured_count = captured_bits.bit_count()
             while captured_bits:
                 lsb = captured_bits & -captured_bits
                 idx = lsb.bit_length() - 1
@@ -56,9 +67,16 @@ class GomokuBoard:
                     self.canvas.delete(self.board[cap_row][cap_col]["id"])
                     self.board[cap_row][cap_col] = None
                 captured_bits ^= lsb
-
-            if (player == 'X' and has_five(self.bb_X)) or (player == 'O' and has_five(self.bb_O)):
-                self.turn_label.configure(text=f"{'Black' if player == 'X' else 'White'} wins!")
+            if captured_count:
+                if player == 'X':
+                    self.captured_X += captured_count
+                else:
+                    self.captured_O += captured_count
+                self.update_capture_label()
+            if ((player == 'X' and has_five(self.bb_X)) or (player == 'O' and has_five(self.bb_O))
+                or (self.captured_X >= 10) or (self.captured_O >= 10)):
+                winner = 'Black' if (player == 'X' and has_five(self.bb_X)) or self.captured_X >= 10 else 'White'
+                self.turn_label.configure(text=f"{winner} wins!")
                 self.game_over = True
             else:
                 self.turn += 1
@@ -116,9 +134,12 @@ def main():
     canvas.pack(side="left", padx=10, pady=10)
 
     turn_label = ctk.CTkLabel(frame, text="", font=("Arial", 16))
-    turn_label.pack(side="bottom", padx=10, pady=10)
+    turn_label.pack(side="bottom", padx=10, pady=4)
 
-    board = GomokuBoard(canvas, turn_label, size=board_size, cell_size=cell_size)
+    capture_label = ctk.CTkLabel(frame, text="", font=("Arial", 14))
+    capture_label.pack(side="bottom", padx=10, pady=4)
+
+    board = GomokuBoard(canvas, turn_label, capture_label, size=board_size, cell_size=cell_size)
 
     reset_btn = ctk.CTkButton(frame, text="Reset Game", command=board.reset_board)
     reset_btn.pack(side="right", padx=20, pady=10, fill="y")
