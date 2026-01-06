@@ -371,14 +371,48 @@ def evaluate_board(bb_X, bb_0):
 
     return score_X - score_0
 
+DIRS = [
+    (SHIFT_RIGHT, MASK_NO_COL18 & MASK_NO_COL17 & MASK_NO_COL16),
+    (SHIFT_DOWN, FULL_MASK),  # vertical safe
+    (SHIFT_DOWN_RIGHT, MASK_NO_COL18 & MASK_NO_COL17 & MASK_NO_COL16),
+    (SHIFT_DOWN_LEFT, MASK_NO_COL0 & MASK_NO_COL1 & MASK_NO_COL2),
+]
+
+def apply_captures(bb_self, bb_opp, move_bit):
+    """Remove captured opponent pairs created by the stone at move_bit."""
+    # Forward and backward for each direction
+    for shift, run_mask in DIRS:
+        # forward
+        if move_bit & run_mask & (run_mask >> shift) & (run_mask >> (2*shift)):
+            a = move_bit << shift
+            b = move_bit << (2*shift)
+            c = move_bit << (3*shift)
+            if (a & bb_opp) and (b & bb_opp) and (c & bb_self):
+                bb_opp ^= (a | b)
+        # backward
+        if move_bit & run_mask & (run_mask << shift) & (run_mask << (2*shift)):
+            a = move_bit >> shift
+            b = move_bit >> (2*shift)
+            c = move_bit >> (3*shift)
+            if (a & bb_opp) and (b & bb_opp) and (c & bb_self):
+                bb_opp ^= (a | b)
+    return bb_self, bb_opp
+
 # --- Move functions --- #
 def play_move(bb_X, bb_0, row, col, player):
     """ Play a move at (row, col) on the bitboard bb. """
+    move_bit = pos_to_bit(row, col)
+    if (bb_X | bb_0) & move_bit:
+        raise ValueError("Cell already occupied")
+
     if player == 'X':
-        bb_X = set_bit(bb_X, row, col)
-    else:
-        bb_0 = set_bit(bb_0, row, col)
-    return bb_X, bb_0
+        bb_self, bb_opp = bb_X | move_bit, bb_0
+        bb_self, bb_opp = apply_captures(bb_self, bb_opp, move_bit)
+        return bb_self, bb_opp
+
+    bb_self, bb_opp = bb_0 | move_bit, bb_X
+    bb_self, bb_opp = apply_captures(bb_self, bb_opp, move_bit)
+    return bb_opp, bb_self
 
 def undo_move(bb_X, bb_0, row, col, player):
     """ Undo a move at (row, col) on the bitboard bb. """
@@ -437,4 +471,16 @@ if __name__ == "__main__":
     # bb_X, bb_O = play_move(bb_X, bb_O, 8, 12, 'O')
     # bb_X, bb_O = play_move(bb_X, bb_O, 9, 9, 'O')
     print_board(bb_X, bb_O)
+    print("Évaluation:", evaluate_board(bb_X, bb_O))
+
+    # --- Test capture application --- #
+    print("Avant application des captures:")
+    print_board(bb_X, bb_O)
+
+    # Appliquer les captures pour le dernier coup joué par X (ligne de 4)
+    bb_X, bb_O = apply_captures(bb_X, bb_O, pos_to_bit(4, 17))
+
+    print("Après application des captures:")
+    print_board(bb_X, bb_O)
+
     print("Évaluation:", evaluate_board(bb_X, bb_O))

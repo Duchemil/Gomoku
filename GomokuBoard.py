@@ -1,4 +1,5 @@
 import customtkinter as ctk
+from bitboard import play_move, has_five
 
 class GomokuBoard:
     def __init__(self, canvas, turn_label, size=19, cell_size=30):
@@ -8,6 +9,9 @@ class GomokuBoard:
         self.cell_size = cell_size
         self.turn = 0
         self.board = [[None for _ in range(size)] for _ in range(size)]
+        self.bb_X = 0
+        self.bb_O = 0
+        self.game_over = False
         self.draw_board()
         self.update_turn_label()
 
@@ -15,29 +19,11 @@ class GomokuBoard:
         player = "Black" if self.turn % 2 == 0 else "White"
         self.turn_label.configure(text=f"Current turn: {player}")
 
-    def is_win(self, row, col):
-        """ Check for winning condition by checking rows, columns, and diagonals with a total of 5 in a row. """
-        directions = [(1, 0), (0, 1), (1, 1), (1, -1)]
-        for dr, dc in directions:
-            count = 1
-            # Check in the positive direction
-            r, c = row + dr, col + dc
-            while 0 <= r < self.size and 0 <= c < self.size and self.board[r][c] == self.board[row][col]:
-                count += 1
-                r += dr
-                c += dc
-            # Check in the negative direction
-            r, c = row - dr, col - dc
-            while 0 <= r < self.size and 0 <= c < self.size and self.board[r][c] == self.board[row][col]:
-                count += 1
-                r -= dr
-                c -= dc
-            if count >= 5:
-                return True
-        return False
-    
     def reset_board(self):
         self.turn = 0
+        self.bb_X = 0
+        self.bb_O = 0
+        self.game_over = False
         self.board = [[None for _ in range(self.size)] for _ in range(self.size)]
         self.canvas.delete("all")
         self.draw_board()
@@ -46,19 +32,34 @@ class GomokuBoard:
     def draw_board(self):
         # Draw clickable points at intersections
         def on_point_click(event, row, col):
+            if self.game_over or self.board[row][col] is not None:
+                return
+            player = 'X' if self.turn % 2 == 0 else 'O'
+            prev_bb_X, prev_bb_O = self.bb_X, self.bb_O
+            try:
+                self.bb_X, self.bb_O = play_move(self.bb_X, self.bb_O, row, col, player)
+            except ValueError:
+                return  # occupied
             x = col * self.cell_size + self.cell_size
             y = row * self.cell_size + self.cell_size
             r = 15
-            if self.board[row][col] is not None:
-                return  # Ignore if already played
-            if self.turn % 2 == 0:
-                self.canvas.create_oval(x - r, y - r, x + r, y + r, fill="black", outline="black", width=2)
-                self.board[row][col] = '1'
-            else:
-                self.canvas.create_oval(x - r, y - r, x + r, y + r, fill="white", outline="white", width=2)
-                self.board[row][col] = '2'
-            if self.is_win(row, col):
-                self.turn_label.configure(text=f"{'Black' if self.board[row][col]=='1' else 'White'} wins!")
+            color = "black" if player == 'X' else "white"
+            stone_id = self.canvas.create_oval(x - r, y - r, x + r, y + r, fill=color, outline=color, width=2)
+            self.board[row][col] = {"player": player, "id": stone_id}
+
+            captured_bits = (prev_bb_O & ~self.bb_O) if player == 'X' else (prev_bb_X & ~self.bb_X)
+            while captured_bits:
+                lsb = captured_bits & -captured_bits
+                idx = lsb.bit_length() - 1
+                cap_row, cap_col = divmod(idx, self.size)
+                if self.board[cap_row][cap_col]:
+                    self.canvas.delete(self.board[cap_row][cap_col]["id"])
+                    self.board[cap_row][cap_col] = None
+                captured_bits ^= lsb
+
+            if (player == 'X' and has_five(self.bb_X)) or (player == 'O' and has_five(self.bb_O)):
+                self.turn_label.configure(text=f"{'Black' if player == 'X' else 'White'} wins!")
+                self.game_over = True
             else:
                 self.turn += 1
                 self.update_turn_label()
