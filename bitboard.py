@@ -220,50 +220,75 @@ def dead_four(bb_self, bb_ops):
     return total
 
 def open_three(bb_self, bb_ops):
-    """Count open-three patterns (.XXX.) for bb_self against bb_ops."""
+    """Count open-three patterns for bb_self against bb_ops.
+
+    Includes both contiguous .XXX. and broken threes .XX.X. / .X.XX. with open ends.
+    """
     empty = ~(bb_self | bb_ops) & FULL_MASK
     total = 0
 
-    def count_dir(shift, run_mask, before_mask):
-        # Starts of XXX runs in this direction (leftmost cell of the run)
+    def count_dir(shift, run_mask3, before_mask, after3_mask, after4_mask):
+        cnt = 0
+        # Contiguous .XXX.
         starts = bb_self & (bb_self >> shift) & (bb_self >> (2 * shift))
-        starts &= run_mask  # ensure the 3-run itself doesn’t wrap across columns
+        starts &= run_mask3
+        before_ok = ((empty & before_mask) << shift)
+        after3_ok = ((empty & after3_mask) >> (3 * shift))
+        cnt += (starts & before_ok & after3_ok).bit_count()
 
-        # Align empties to the start bit:
-        # - before_ok: empty exactly at i - shift  => (empty << shift) aligned to i
-        # - after_ok:  empty exactly at i + 3*shift => (empty >> (3*shift)) aligned to i
-        before_ok = (empty & before_mask) << shift
-        after_ok  = empty >> (3 * shift)
+        # Broken .XX.X.
+        starts_b1 = bb_self & (bb_self >> shift) & ((empty & run_mask3) >> (2 * shift)) & (bb_self >> (3 * shift))
+        starts_b1 &= run_mask3
+        after4_ok = ((empty & after4_mask) >> (4 * shift))
+        cnt += (starts_b1 & before_ok & after4_ok).bit_count()
 
-        live3_starts = starts & before_ok & after_ok
-        return live3_starts.bit_count()
+        # Broken .X.XX.
+        starts_b2 = bb_self & ((empty & run_mask3) >> shift) & (bb_self >> (2 * shift)) & (bb_self >> (3 * shift))
+        starts_b2 &= run_mask3
+        cnt += (starts_b2 & before_ok & after4_ok).bit_count()
+
+        return cnt
 
     # Horizontal
     total += count_dir(
         SHIFT_RIGHT,
-        MASK_NO_COL18 & MASK_NO_COL17 & MASK_NO_COL16,  # 3 stones fit to the right
-        MASK_NO_COL18,  # before (i - 1) must not come from col 18 wrapping to next row
+        MASK_NO_COL18 & MASK_NO_COL17 & MASK_NO_COL16,                  # up to i+3
+        MASK_NO_COL18,                                                   # i-1 in-bounds
+        MASK_NO_COL0 & MASK_NO_COL1 & MASK_NO_COL2,                      # i+3 in-bounds
+        MASK_NO_COL0 & MASK_NO_COL1 & MASK_NO_COL2 & MASK_NO_COL3,       # i+4 in-bounds
     )
 
-    # Vertical (no column wrap-around on vertical shifts; run_mask is full board)
+    # Vertical
     total += count_dir(
         SHIFT_DOWN,
         FULL_MASK,
-        FULL_MASK,
+        MASK_NO_ROW0,                                                    # i-1 row in-bounds
+        MASK_NO_ROW16 & MASK_NO_ROW17 & MASK_NO_ROW18,                   # i+3 row in-bounds
+        MASK_NO_ROW15 & MASK_NO_ROW16 & MASK_NO_ROW17 & MASK_NO_ROW18,   # i+4 row in-bounds
     )
 
     # Diagonal down-right
     total += count_dir(
         SHIFT_DOWN_RIGHT,
-        MASK_NO_COL18 & MASK_NO_COL17 & MASK_NO_COL16,
-        MASK_NO_COL18,  # avoid wrapping from last column
+        (MASK_NO_COL18 & MASK_NO_COL17 & MASK_NO_COL16) &
+        (MASK_NO_ROW18 & MASK_NO_ROW17 & MASK_NO_ROW16),
+        MASK_NO_COL18,                                                   # avoid wrap on <<
+        (MASK_NO_COL0 & MASK_NO_COL1 & MASK_NO_COL2) &                   # i+3 in-bounds
+        (MASK_NO_ROW0 & MASK_NO_ROW1 & MASK_NO_ROW2),
+        (MASK_NO_COL0 & MASK_NO_COL1 & MASK_NO_COL2 & MASK_NO_COL3) &    # i+4 in-bounds
+        (MASK_NO_ROW0 & MASK_NO_ROW1 & MASK_NO_ROW2 & MASK_NO_ROW3),
     )
 
     # Diagonal down-left
     total += count_dir(
         SHIFT_DOWN_LEFT,
-        MASK_NO_COL0 & MASK_NO_COL1 & MASK_NO_COL2,
-        MASK_NO_COL0,  # avoid wrapping from first column
+        (MASK_NO_COL0 & MASK_NO_COL1 & MASK_NO_COL2) &
+        (MASK_NO_ROW18 & MASK_NO_ROW17 & MASK_NO_ROW16),
+        MASK_NO_COL0,                                                    # avoid wrap on <<
+        (MASK_NO_COL16 & MASK_NO_COL17 & MASK_NO_COL18) &                # i+3 in-bounds
+        (MASK_NO_ROW0 & MASK_NO_ROW1 & MASK_NO_ROW2),
+        (MASK_NO_COL15 & MASK_NO_COL16 & MASK_NO_COL17 & MASK_NO_COL18) &  # i+4 in-bounds
+        (MASK_NO_ROW0 & MASK_NO_ROW1 & MASK_NO_ROW2 & MASK_NO_ROW3),
     )
 
     return total
@@ -398,7 +423,125 @@ def apply_captures(bb_self, bb_opp, move_bit):
                 bb_opp ^= (a | b)
     return bb_self, bb_opp
 
-# --- Move functions --- #
+def _count_open_threes_involving_move(bb_self, bb_opp, row, col):
+    """Count open-three patterns involving (row, col), including broken threes.
+
+    We count at most one open three per direction (horizontal, vertical, two diagonals)
+    to avoid double-counting the same line. An open three requires both ends open.
+    Supported shapes per direction ('.' empty, 'X' self):
+      - Contiguous: .XXX.
+      - Broken:    .XX.X. and .X.XX.
+    """
+    def cell_has_self(r, c):
+        return in_bounds(r, c) and get_bit(bb_self, r, c)
+
+    def cell_empty(r, c):
+        return in_bounds(r, c) and not get_bit(bb_self | bb_opp, r, c)
+
+    dir_count = 0
+    for dr, dc in [(0, 1), (1, 0), (1, 1), (1, -1)]:
+        found = False
+
+        # --- Contiguous .XXX. (three placements for the new stone) ---
+        # leftmost
+        if (cell_has_self(row, col)
+            and cell_has_self(row + dr, col + dc)
+            and cell_has_self(row + 2*dr, col + 2*dc)
+            and cell_empty(row - dr, col - dc)
+            and cell_empty(row + 3*dr, col + 3*dc)):
+            found = True
+        # middle
+        if not found and (
+            cell_has_self(row - dr, col - dc)
+            and cell_has_self(row, col)
+            and cell_has_self(row + dr, col + dc)
+            and cell_empty(row - 2*dr, col - 2*dc)
+            and cell_empty(row + 2*dr, col + 2*dc)
+        ):
+            found = True
+        # rightmost
+        if not found and (
+            cell_has_self(row - 2*dr, col - 2*dc)
+            and cell_has_self(row - dr, col - dc)
+            and cell_has_self(row, col)
+            and cell_empty(row - 3*dr, col - 3*dc)
+            and cell_empty(row + dr, col + dc)
+        ):
+            found = True
+
+        # --- Broken .XX.X. (gap after two stones) ---
+        # stone at t0
+        if not found and (
+            cell_empty(row - dr, col - dc)
+            and cell_has_self(row, col)
+            and cell_has_self(row + dr, col + dc)
+            and cell_empty(row + 2*dr, col + 2*dc)
+            and cell_has_self(row + 3*dr, col + 3*dc)
+            and cell_empty(row + 4*dr, col + 4*dc)
+        ):
+            found = True
+        # stone at t1
+        if not found and (
+            cell_empty(row - 2*dr, col - 2*dc)
+            and cell_has_self(row - dr, col - dc)
+            and cell_has_self(row, col)
+            and cell_empty(row + dr, col + dc)
+            and cell_has_self(row + 2*dr, col + 2*dc)
+            and cell_empty(row + 3*dr, col + 3*dc)
+        ):
+            found = True
+        # stone at t3
+        if not found and (
+            cell_empty(row - 4*dr, col - 4*dc)
+            and cell_has_self(row - 3*dr, col - 3*dc)
+            and cell_empty(row - 2*dr, col - 2*dc)
+            and cell_has_self(row - dr, col - dc)
+            and cell_has_self(row, col)
+            and cell_empty(row + dr, col + dc)
+        ):
+            found = True
+
+        # --- Broken .X.XX. (gap between first and last two stones) ---
+        # stone at t0
+        if not found and (
+            cell_empty(row - dr, col - dc)
+            and cell_has_self(row, col)
+            and cell_empty(row + dr, col + dc)
+            and cell_has_self(row + 2*dr, col + 2*dc)
+            and cell_has_self(row + 3*dr, col + 3*dc)
+            and cell_empty(row + 4*dr, col + 4*dc)
+        ):
+            found = True
+        # stone at t2
+        if not found and (
+            cell_empty(row - 3*dr, col - 3*dc)
+            and cell_has_self(row - 2*dr, col - 2*dc)
+            and cell_empty(row - dr, col - dc)
+            and cell_has_self(row, col)
+            and cell_has_self(row + dr, col + dc)
+            and cell_empty(row + 2*dr, col + 2*dc)
+        ):
+            found = True
+        # stone at t3
+        if not found and (
+            cell_empty(row - 4*dr, col - 4*dc)
+            and cell_has_self(row - 3*dr, col - 3*dc)
+            and cell_has_self(row - 2*dr, col - 2*dc)
+            and cell_empty(row - dr, col - dc)
+            and cell_has_self(row, col)
+            and cell_empty(row + dr, col + dc)
+        ):
+            found = True
+
+        if found:
+            dir_count += 1
+
+    return dir_count
+
+def is_double_three(bb_self, bb_opp, row, col):
+    """Return True if placing a stone at (row, col) results in at least two open threes that include that stone."""
+    return _count_open_threes_involving_move(bb_self, bb_opp, row, col) >= 2
+
 def play_move(bb_X, bb_O, row, col, player):
     """ Play a move at (row, col); always return (bb_X, bb_O). """
     move_bit = pos_to_bit(row, col)
@@ -408,6 +551,9 @@ def play_move(bb_X, bb_O, row, col, player):
     if player == 'X':
         bb_X_new, bb_O_new = bb_X | move_bit, bb_O
         bb_X_new, bb_O_new = apply_captures(bb_X_new, bb_O_new, move_bit)
+        # 3x3 rule: forbid Black from creating two open threes
+        if is_double_three(bb_X_new, bb_O_new, row, col):
+            raise ValueError("Illegal move: double three is forbidden for Black")
         return bb_X_new, bb_O_new
 
     bb_O_new, bb_X_new = bb_O | move_bit, bb_X

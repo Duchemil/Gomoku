@@ -41,10 +41,17 @@ def get_legal_moves(bb_X, bb_0):
     return moves
 
 def get_all_possible_moves(bb_X, bb_0, maximizingPlayer=True):
-    """Generate child positions for side to move."""
+    """Generate child positions for side to move.
+
+    Note: Illegal moves (e.g., Black double-three) are filtered by catching ValueError from play_move.
+    """
     player = 'X' if maximizingPlayer else 'O'
     children = []
     for (r, c) in get_legal_moves(bb_X, bb_0):
-        new_X, new_O = play_move(bb_X, bb_0, r, c, player)
+        try:
+            new_X, new_O = play_move(bb_X, bb_0, r, c, player)
+        except ValueError:
+            # Skip illegal moves
+            continue
         children.append((new_X, new_O, (r, c)))
     return children

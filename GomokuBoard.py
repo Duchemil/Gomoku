@@ -1,5 +1,5 @@
 import customtkinter as ctk
-from bitboard import play_move, has_five
+from bitboard import play_move, has_five, is_double_three
 
 class GomokuBoard:
     def __init__(self, canvas, turn_label, capture_label, size=19, cell_size=30):
@@ -48,8 +48,12 @@ class GomokuBoard:
             prev_bb_X, prev_bb_O = self.bb_X, self.bb_O
             try:
                 self.bb_X, self.bb_O = play_move(self.bb_X, self.bb_O, row, col, player)
-            except ValueError:
-                return  # occupied
+            except ValueError as e:
+                # Show a brief UI message for illegal moves (e.g., double three)
+                self.turn_label.configure(text=f"Illegal move: {e}")
+                # Restore the normal turn label after a short delay
+                self.canvas.after(1500, self.update_turn_label)
+                return
             x = col * self.cell_size + self.cell_size
             y = row * self.cell_size + self.cell_size
             r = 15
